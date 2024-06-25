@@ -1,0 +1,293 @@
+command:
+  - "/opt/keycloak/bin/kc.sh"
+  - "start"
+  - "--http-enabled=true"
+  - "--http-port=8080"
+  - "--hostname-strict=false"
+  - "--hostname-strict-https=false"
+  - "--optimized"
+#  - "--cache-stack=kubernetes"
+  
+#fullnameOverride: "Keycloakv24.example.com"
+#nameOverride: "Keycloakv24"
+
+extraEnv: |
+  - name: JAVA_OPTS_APPEND
+    value: >-
+      -Djgroups.dns.query={{ include "keycloak.fullname" . }}-headless
+  - name: KC_CACHE
+    value: "ispn"
+  - name: KC_CACHE_CONFIG_FILE
+    value: cache-ispn.xml
+  - name: KC_LOG_LEVEL
+    value: DEBUG
+  - name: KC_DB
+    value: postgres
+  - name: KC_DB_URL_HOST
+    value: 'host.docker.internal'
+  - name: KC_DB_URL_PORT
+    value: '5432'
+  - name: KC_DB_URL_DATABASE
+    value: 'keycloak'
+  - name: KC_DB_USERNAME
+    value: 'manish_root'
+  - name: KC_DB_PASSWORD
+    value: 'root'
+    
+cache:
+  stack: kubernetes
+    
+dbchecker:
+  enabled: false
+  
+# The number of replicas to create (has no effect if autoscaling enabled)
+replicas: 1
+
+image:
+  # The Keycloak image repository
+  repository: quay.io/keycloak/keycloak
+  # Overrides the Keycloak image tag whose default is the chart appVersion
+  tag: "24.0.5"
+  # Overrides the Keycloak image tag with a specific digest
+  digest: ""
+  # The Keycloak image pull policy
+  pullPolicy: IfNotPresent
+
+statefulsetLabels:
+  app.kubernetes.io/name: metrics
+  release: prometheus
+  
+podLabels:
+#  app.kubernetes.io/name: metrics
+  release: prometheus
+  
+# Image pull secrets for the Pod
+imagePullSecrets: []
+# - name: myRegistrKeySecretName
+
+# Mapping between IPs and hostnames that will be injected as entries in the Pod's hosts files
+hostAliases: []
+# - ip: "1.2.3.4"
+#   hostnames:
+#     - "my.host.com"
+
+#database:
+#  vendor: postgres
+#  #hostname: 192.168.0.105
+#  hostname: host.docker.internal
+#  port: 5432
+#  username: manish_root
+#  password: root
+#  database: kc_backup
+
+# Indicates whether information about services should be injected into Pod's environment variables, matching the syntax of Docker links
+enableServiceLinks: true
+
+# Pod management policy. One of `Parallel` or `OrderedReady`
+podManagementPolicy: OrderedReady
+
+# StatefulSet's update strategy
+updateStrategy: RollingUpdate
+
+# Pod restart policy. One of `Always`, `OnFailure`, or `Never`
+restartPolicy: Always
+
+serviceAccount:
+  # Specifies whether a ServiceAccount should be created
+  create: true
+  # Specifies whether the ServiceAccount can get and list pods
+  allowReadPods: false
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+  # Additional annotations for the ServiceAccount
+  annotations: {}
+  # Additional labels for the ServiceAccount
+  labels: {}
+  # Image pull secrets that are attached to the ServiceAccount
+  imagePullSecrets: []
+  # Automount API credentials for the Service Account
+  automountServiceAccountToken: true
+  
+rbac:
+  create: true
+  rules: []
+  # RBAC rules for KUBE_PING
+  #  - apiGroups:
+  #      - ""
+  #    resources:
+  #      - pods
+  #    verbs:
+  #      - get
+  #      - list
+  
+# Additional environment variables for Keycloak
+extraEnv: |
+  - name: KC_LOG_LEVEL
+    value: DEBUG
+  - name: AFERO_CLIENT_DATAPROXY_URI
+    value: http://host.docker.internal:9502
+  - name: AFERO_CLIENT_SEMANTICSDATA_URI
+    value: http://host.docker.internal:9503
+  - name: KEYCLOAK_ADMIN
+    value: admin1
+  - name: KEYCLOAK_ADMIN_PASSWORD
+    value: admin  
+  - name: KC_HTTPS_CERTIFICATE_FILE
+    value: /opt/keycloak/certs/localhostcert.pem
+  - name: KC_HTTPS_CERTIFICATE_KEY_FILE
+    value: /opt/keycloak/certs/localhostkey.pem    
+    
+extraInitContainers: |
+  - name: spi-provider
+    image: 'keycloak-spi-local:2'
+    imagePullPolicy: IfNotPresent
+    command:
+      - sh
+    args:
+      - -c
+      - |
+        cp -R /deployments/* /mnt_deployments && cp -R /certs/* /mnt_certs && cp -R /modules/keycloak/* /mnt_modules
+    volumeMounts:
+      - name: deployments
+        mountPath: /mnt_deployments
+      - name: certs
+        mountPath: /mnt_certs
+      - name: modules
+        mountPath: /mnt_modules
+  - name: spi-permisions
+    image: busybox
+    command:
+      - chown
+      - -R
+      - 1000:0
+      - /deployments
+      - /certs
+      - /modules
+    volumeMounts:
+      - name: deployments
+        mountPath: /deployments
+      - name: certs
+        mountPath: /certs
+      - name: modules
+        mountPath: /modules
+
+extraVolumeMounts: |
+  - name: deployments
+    mountPath: /opt/keycloak/providers
+  - name: certs
+    mountPath: /opt/keycloak/certs
+  - name: modules
+    mountPath: /mnt_modules  
+
+extraVolumes: |
+  - name: deployments
+    emptyDir: {}
+  - name: certs
+    emptyDir: {}
+  - name: modules
+    emptyDir: {}
+    
+# Liveness probe configuration
+livenessProbe: |
+  httpGet:
+    path: '{{ tpl .Values.http.relativePath $ | trimSuffix "/" }}/health/live'
+    port: http
+  initialDelaySeconds: 0
+  timeoutSeconds: 5
+  
+# Readiness probe configuration
+readinessProbe: |
+  httpGet:
+    path: '{{ tpl .Values.http.relativePath $ | trimSuffix "/" }}/health/ready'
+    port: http
+  initialDelaySeconds: 10
+  timeoutSeconds: 1
+  
+# Pod resource requests and limits
+resources:
+  requests:
+    cpu: "1"
+    memory: 2G
+
+autoscaling:
+  # If `true`, an autoscaling/v2 HorizontalPodAutoscaler resource is created (requires Kubernetes 1.23 or above)
+  # Autoscaling seems to be most reliable when using KUBE_PING service discovery (see README for details)
+  # This disables the `replicas` field in the StatefulSet
+  enabled: true
+  # Additional HorizontalPodAutoscaler labels
+  labels: {}
+  # The minimum and maximum number of replicas for the Keycloak StatefulSet
+  minReplicas: 3
+  maxReplicas: 10
+  # The metrics to use for scaling
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  # The scaling policy to use. This will scale up quickly but only scale down a single Pod per 5 minutes.
+  # This is important because caches are usually only replicated to 2 Pods and if one of those Pods is terminated this will give the cluster time to recover.
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+  
+http:
+  relativePath: '/auth/'
+  
+metrics:
+  enabled: true
+  
+health:
+  enabled: true
+  
+podMonitor:
+  # If `true`, a ServiceMonitor resource for the prometheus-operator is created
+  enabled: true
+  namespace: "default"
+  interval: 15s
+  scrapeTimeout: 15s  
+  
+service:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: http
+  - containerPort: 9990
+    name: http-management
+    protocol: TCP
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    
+#extraServiceMonitor:
+  # If `true`, an additional ServiceMonitor resource for the prometheus-operator is created
+  #enabled: true
+  
+test:
+  # If `true`, test resources are created
+  enabled: true
+  image:
+    # The image for the test Pod
+    repository: docker.io/seleniarm/standalone-chromium
+    # The tag for the test Pod image
+    tag: "117.0"
+    # The image pull policy for the test Pod image
+    pullPolicy: IfNotPresent
+  # SecurityContext for the entire test Pod
+  podSecurityContext:
+    fsGroup: 1000
+  # SecurityContext for the test container
+  securityContext:
+    runAsUser: 1000
+    runAsNonRoot: true
+  # See https://helm.sh/docs/topics/charts_hooks/#hook-deletion-policies
+  deletionPolicy: before-hook-creation
+  
